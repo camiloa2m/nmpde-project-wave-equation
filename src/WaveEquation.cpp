@@ -10,8 +10,7 @@ void WaveEquation::setup()
     Triangulation<dim> mesh_serial;
     const double left = 0.0;
     const double right = 1.0;
-    const unsigned int n_subdivisions = 50;
-    
+
     if (dim == 1) {
       GridGenerator::subdivided_hyper_cube(mesh_serial, n_subdivisions, left, right, true);
     } else {
@@ -33,6 +32,7 @@ void WaveEquation::setup()
 
   fe = std::make_unique<FE_SimplexP<dim>>(r);
   quadrature = std::make_unique<QGaussSimplex<dim>>(r + 1);
+  mapping = std::make_unique<MappingFE<dim>>(FE_SimplexP<dim>(1));
 
   pcout << "-----------------------------------------------" << std::endl;
   pcout << "Initializing the DoF handler" << std::endl;
@@ -59,19 +59,29 @@ void WaveEquation::setup()
                                             g, // value g
                                             constraints);
   constraints.close();
-  // These constraints are automatically applied to our matrices and RHS during 
-  // the distribute_local_to_global call in our assembly routine.
+  // M and K are assembled WITHOUT constraints (pure FE matrices) and are used
+  // only for matrix-vector products when building the RHS. The system matrices
+  // matrix_u = M + theta^2*dt^2*K and matrix_v = M are assembled WITH the
+  // Dirichlet constraints (via distribute_local_to_global), so each constrained
+  // DOF gets a single identity row. The RHS gets constraints.set_zero each step.
 
-  TrilinosWrappers::SparsityPattern sparsity(locally_owned_dofs, MPI_COMM_WORLD);
-  DoFTools::make_sparsity_pattern(dof_handler, sparsity, constraints, false);
-  sparsity.compress();
+  // Full pattern (no constraints) for the pure FE matrices M and K: they are
+  // assembled with raw .add() and so need entries at constrained rows too.
+  TrilinosWrappers::SparsityPattern sparsity_full(locally_owned_dofs, MPI_COMM_WORLD);
+  DoFTools::make_sparsity_pattern(dof_handler, sparsity_full);
+  sparsity_full.compress();
 
-  mass_matrix.reinit(sparsity);
-  stiffness_matrix.reinit(sparsity);
-  system_matrix.reinit(sparsity);
+  // Constrained pattern for the system matrices matrix_u and matrix_v, which are
+  // assembled via distribute_local_to_global (condenses constrained entries).
+  TrilinosWrappers::SparsityPattern sparsity_constrained(locally_owned_dofs, MPI_COMM_WORLD);
+  DoFTools::make_sparsity_pattern(dof_handler, sparsity_constrained, constraints, false);
+  sparsity_constrained.compress();
+
+  mass_matrix.reinit(sparsity_full);
+  stiffness_matrix.reinit(sparsity_full);
+  matrix_u.reinit(sparsity_constrained);
+  matrix_v.reinit(sparsity_constrained);
   
-  system_rhs.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-
   // Initialize all kinematic vectors
   solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
   solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
@@ -90,39 +100,40 @@ void WaveEquation::setup()
   tmp_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
   force_terms.reinit(locally_owned_dofs, MPI_COMM_WORLD);
 
-  // Set initial conditions by interpolating the FunctionU0 and FunctionV0 into our FE space.
-  WaveEquation::FunctionU0 u_0;
-  WaveEquation::FunctionV0 v_0;
-  
-  // Using projection instead of interpolation for better accuracy, especially for higher-order elements.
-  // It ensures the initial energy in the FE space matches the continuous initial energy more closely.
-  // Using QGaussSimplex with r+2 points for better accuracy in the projection.
-  VectorTools::project(dof_handler, constraints, QGaussSimplex<dim>(r + 2), u_0, old_solution_owned);
-  VectorTools::project(dof_handler, constraints, QGaussSimplex<dim>(r + 2), v_0, old_velocity_owned);
-  // VectorTools::interpolate(dof_handler, u_0, old_solution_owned);
-  // VectorTools::interpolate(dof_handler, v_0, old_velocity_owned);
+  FunctionU0 u_0;
+  FunctionV0 v_0;
+
+  VectorTools::project(*mapping, dof_handler, constraints, QGaussSimplex<dim>(r + 2), u_0, old_solution_owned);
+  VectorTools::project(*mapping, dof_handler, constraints, QGaussSimplex<dim>(r + 2), v_0, old_velocity_owned);
 
   old_solution = old_solution_owned;
   old_velocity = old_velocity_owned;
 }
 
-void WaveEquation::assemble_matrices() 
+void WaveEquation::assemble_matrices()
 {
   pcout << "Assembling matrices..." << std::endl;
-  mass_matrix = 0;
+  mass_matrix      = 0;
   stiffness_matrix = 0;
+  matrix_u         = 0;
+  matrix_v         = 0;
 
   FEValues<dim> fe_values(*fe, *quadrature, update_values | update_gradients | update_quadrature_points | update_JxW_values);
   const unsigned int dofs_per_cell = fe->dofs_per_cell;
   const unsigned int n_q = quadrature->size();
   FullMatrix<double> cell_mass(dofs_per_cell, dofs_per_cell);
   FullMatrix<double> cell_stiffness(dofs_per_cell, dofs_per_cell);
+  FullMatrix<double> cell_u(dofs_per_cell, dofs_per_cell);
+  FullMatrix<double> cell_v(dofs_per_cell, dofs_per_cell);
   std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
+
+  // Coefficient combining M and K into the U-system matrix: M + theta^2*dt^2*K.
+  const double u_stiffness_coeff = theta * theta * delta_t * delta_t;
 
   for (const auto &cell : dof_handler.active_cell_iterators()) {
     if (!cell->is_locally_owned()) continue;
     fe_values.reinit(cell);
-    cell_mass = 0; 
+    cell_mass = 0;
     cell_stiffness = 0;
     for (unsigned int q = 0; q < n_q; ++q) {
       const double rho_val = rho(fe_values.quadrature_point(q));
@@ -137,72 +148,120 @@ void WaveEquation::assemble_matrices()
     // Neumann BCs if needed can be added here.
     // Current implementation assumes homogeneous Neumann (natural) BCs, so no additional terms are added.
 
+    // Local system matrices: U-system is M + theta^2*dt^2*K, V-system is M.
+    cell_u = cell_mass;
+    cell_u.add(u_stiffness_coeff, cell_stiffness);
+    cell_v = cell_mass;
+
     cell->get_dof_indices(dof_indices);
-    // The constraints object will handle the application of Dirichlet BCs during assembly, 
-    // ensuring that the resulting global matrices are consistent with the specified boundary conditions.
-    constraints.distribute_local_to_global(cell_mass, dof_indices, mass_matrix);
-    constraints.distribute_local_to_global(cell_stiffness, dof_indices, stiffness_matrix);
+
+    // M and K are assembled WITHOUT constraints: they are the pure FE matrices,
+    // used only for matrix-vector products when building the RHS.
+    for (unsigned int i = 0; i < dofs_per_cell; ++i)
+      for (unsigned int j = 0; j < dofs_per_cell; ++j)
+        {
+          mass_matrix.add(dof_indices[i], dof_indices[j], cell_mass(i, j));
+          stiffness_matrix.add(dof_indices[i], dof_indices[j], cell_stiffness(i, j));
+        }
+
+    // matrix_u and matrix_v are assembled WITH the Dirichlet constraints so each
+    // constrained DOF gets a single identity row.
+    // Local contributions are inserted into the global matrices consistently with 
+    // the affine constraints.
+    constraints.distribute_local_to_global(cell_u, dof_indices, matrix_u);
+    constraints.distribute_local_to_global(cell_v, dof_indices, matrix_v);
   }
 
   mass_matrix.compress(VectorOperation::add);
   stiffness_matrix.compress(VectorOperation::add);
-
-  // system_matrix for the first-order coupled theta-method: M + (theta*dt)^2 * K 
-  system_matrix.copy_from(mass_matrix);
-  system_matrix.add(theta * theta * delta_t * delta_t, stiffness_matrix);
+  matrix_u.compress(VectorOperation::add);
+  matrix_v.compress(VectorOperation::add);
 }
 
-void WaveEquation::solve_timestep() {
-  // locally reused member vectors: rhs_owned, tmp_owned, force_terms
+void WaveEquation::solve_timestep()
+{
+  const QGaussSimplex<dim> quadrature_rhs(r + 2);
+  LambdaFunction ff(f);
 
-  // 1. Assemble the Force Vector (f) if this is time-dependent.
-  // For our current problem, f is zero, but we include this step for generality and to show how to handle time-dependent forcing.
-  // Reset force_terms before assembly to avoid accumulation across timesteps.
-  
-  force_terms = 0; 
-  LambdaFunction ff(f); // Wrap the forcing lambda function into a dealii::Function to use with VectorTools
-  ff.set_time(time + (1.0 - theta) * delta_t); 
-  VectorTools::create_right_hand_side(dof_handler, *quadrature, ff, force_terms);
+  // Assemble forcing terms: forcing_terms = theta*dt*F(t_{n+1}) + (1-theta)*dt*F(t_n)
+  // (forcing_terms is added to BOTH the U and V RHS)
+  ff.set_time(time);
+  VectorTools::create_right_hand_side(*mapping, dof_handler, quadrature_rhs, ff, force_terms);
+  force_terms *= theta * delta_t;
 
-  // 2. Build RHS for Velocity
-  // RHS = M*V_n - dt*K*(U_n + theta*(1-theta)*dt*V_n) + dt*F
+  ff.set_time(time - delta_t);
+  VectorTools::create_right_hand_side(*mapping, dof_handler, quadrature_rhs, ff, tmp_owned);
+  force_terms.add((1.0 - theta) * delta_t, tmp_owned);
 
-  mass_matrix.vmult(rhs_owned, old_velocity_owned); 
+  // -----------------------------------------------------------------------
+  // Step 1: solve for U^{n+1}
+  // RHS = M*U^n + dt*M*V^n - theta*(1-theta)*dt^2*K*U^n + theta*dt*forcing_terms
+  // System: (M + theta^2*dt^2*K) * U^{n+1} = RHS
+  // -----------------------------------------------------------------------
+  mass_matrix.vmult(rhs_owned, old_solution_owned);
 
-  tmp_owned = old_solution_owned;
-  tmp_owned.add(theta * (1.0 - theta) * delta_t, old_velocity_owned);
+  mass_matrix.vmult(tmp_owned, old_velocity_owned);
+  rhs_owned.add(delta_t, tmp_owned);
 
-  TrilinosWrappers::MPI::Vector k_term(solution_owned.locally_owned_elements(), MPI_COMM_WORLD);
-  stiffness_matrix.vmult(k_term, tmp_owned);
-  
-  rhs_owned.add(-delta_t, k_term);
-  rhs_owned.add(delta_t, force_terms); // Add the forcing contribution
+  stiffness_matrix.vmult(tmp_owned, old_solution_owned);
+  rhs_owned.add(-theta * (1.0 - theta) * delta_t * delta_t, tmp_owned);
 
-  // 3. Solve for V_{n+1}
+  rhs_owned.add(theta * delta_t, force_terms);
 
-  TrilinosWrappers::PreconditionSSOR prec;
-  prec.initialize(system_matrix);
-  SolverControl solver_control(1000, 1e-12);
-  SolverCG<TrilinosWrappers::MPI::Vector> cg(solver_control);
+  // matrix_u (= M + theta^2*dt^2*K, with Dirichlet identity rows) was assembled
+  // once in assemble_matrices(). Zero the RHS at constrained DOFs so the system
+  // is consistent with those identity rows (homogeneous Dirichlet => value 0).
+  constraints.set_zero(rhs_owned);
 
-  cg.solve(system_matrix, velocity_owned, rhs_owned, prec);
-  //constraints.distribute(velocity_owned); // enforce BCs + update ghosts
-  pcout << "  Linear solver: " << solver_control.last_step() << " CG iterations." << std::endl;
+  {
+    TrilinosWrappers::PreconditionSSOR prec;
+    prec.initialize(matrix_u);
+    SolverControl sc(1000, 1e-8 * rhs_owned.l2_norm());
+    SolverCG<TrilinosWrappers::MPI::Vector> cg(sc);
+    cg.solve(matrix_u, solution_owned, rhs_owned, prec);
+    constraints.distribute(solution_owned);
+    pcout << "  u-equation: " << sc.last_step() << " CG iterations." << std::endl;
+  }
 
-  // 4. Update displacement U_{n+1} using the theta method: U_{n+1} = U_n + dt*(theta*V_{n+1} + (1-theta)*V_n)
-
-  solution_owned = old_solution_owned;
-  solution_owned.add(theta * delta_t, velocity_owned);
-  solution_owned.add((1.0 - theta) * delta_t, old_velocity_owned);
-  //constraints.distribute(solution_owned); // enforce BCs + update ghosts
-
-  // Final sync and state update
   solution = solution_owned;
+
+  // -----------------------------------------------------------------------
+  // Step 2: solve for V^{n+1}, using already-computed U^{n+1}
+  // RHS = -theta*dt*K*U^{n+1} + M*V^n - (1-theta)*dt*K*U^n + forcing_terms
+  // System: M * V^{n+1} = RHS
+  // -----------------------------------------------------------------------
+  stiffness_matrix.vmult(rhs_owned, solution_owned);
+  rhs_owned *= -theta * delta_t;
+
+  mass_matrix.vmult(tmp_owned, old_velocity_owned);
+  rhs_owned += tmp_owned;
+
+  stiffness_matrix.vmult(tmp_owned, old_solution_owned);
+  rhs_owned.add(-(1.0 - theta) * delta_t, tmp_owned);
+
+  rhs_owned += force_terms;
+
+  // matrix_v (= M, with Dirichlet identity rows) was assembled once. Zero the
+  // constrained RHS entries to keep the system consistent.
+  constraints.set_zero(rhs_owned);
+
+  {
+    TrilinosWrappers::PreconditionSSOR prec;
+    prec.initialize(matrix_v);
+    SolverControl sc(1000, 1e-8 * rhs_owned.l2_norm());
+    SolverCG<TrilinosWrappers::MPI::Vector> cg(sc);
+    cg.solve(matrix_v, velocity_owned, rhs_owned, prec);
+    constraints.distribute(velocity_owned);
+    pcout << "  v-equation: " << sc.last_step() << " CG iterations." << std::endl;
+  }
+
   velocity = velocity_owned;
+
+  // Shift to previous timestep
   old_solution_owned = solution_owned;
   old_velocity_owned = velocity_owned;
-  old_solution = solution_owned;
-  old_velocity = velocity_owned;
+  old_solution       = solution_owned;
+  old_velocity       = velocity_owned;
 }
 
 void WaveEquation::compute_energy() const 
@@ -218,6 +277,26 @@ void WaveEquation::compute_energy() const
   
   pcout << "  Energy: " << kinetic + potential << std::endl;
 }
+
+
+double
+WaveEquation::compute_error(const VectorTools::NormType &norm_type,
+                            const Function<dim>         &exact_solution) const
+{
+  const QGaussSimplex<dim> quadrature_error(r + 2);
+
+  Vector<double> error_per_cell(mesh.n_active_cells());
+  VectorTools::integrate_difference(*mapping,
+                                    dof_handler,
+                                    solution,
+                                    exact_solution,
+                                    error_per_cell,
+                                    quadrature_error,
+                                    norm_type);
+
+  return VectorTools::compute_global_error(mesh, error_per_cell, norm_type);
+}
+
 
 void WaveEquation::output() const
 {
