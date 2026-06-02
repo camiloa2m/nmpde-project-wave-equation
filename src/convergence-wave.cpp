@@ -91,9 +91,8 @@ int main(int argc, char *argv[])
       exact_t0.set_time(0.0);
       const double eL2_t0 = problem.compute_error(VectorTools::L2_norm, exact_t0);
       std::cout << "[Info] N=" << N
-                << "  ||u_h - u(T)||: (next line)"
-                << "  ||u_h - u(0)||=" << eL2_t0 << std::endl
-                << "  (if ~0 solver is frozen at t=0; if ~1 solver gives ~0)"
+                << "; ||u_h - u(t=0)||=" << eL2_t0 << std::endl
+                << "  (~0 -> solver stuck at t=0, O(1) -> time evolution OK)"
                 << std::endl;
 
       ExactSolution exact;
