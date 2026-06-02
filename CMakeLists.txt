@@ -5,3 +5,6 @@ include(../common/cmake-common.cmake)
 
 add_executable(exercise-wave src/exercise-wave.cpp src/WaveEquation.cpp)
 deal_ii_setup_target(exercise-wave)
+
+add_executable(convergence-wave src/convergence-wave.cpp src/WaveEquation.cpp)
+deal_ii_setup_target(convergence-wave)
