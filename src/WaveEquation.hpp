@@ -44,37 +44,25 @@ public:
   // Physical dimension (1D, 2D, 3D). Set to 2 for a 2D wave problem.
   static constexpr unsigned int dim = 2;
 
-  // Initial displacement condition: u(x, 0) = u_0(x)
+  // Initial displacement: u(x,y,0) = u_0(x,y)
   class FunctionU0 : public Function<dim>
   {
   public:
     FunctionU0() = default;
-
     virtual double
-    value(const Point<dim> &p,
-          const unsigned int /*component*/ = 0) const override
-    {
-      // Example: A Gaussian pulse centered at (0.5, 0.5)
-      const double d2 = (p[0] - 0.5) * (p[0] - 0.5) + (p[1] - 0.5) * (p[1] - 0.5);
-      return std::exp(-100.0 * d2); 
-    }
+    value(const Point<dim> &p, const unsigned int = 0) const override;
   };
 
-  // Initial velocity condition: \dot{u}(x, 0) = v_0(x)
+  // Initial velocity: du/dt(x,y,0) = v_0(x,y)
   class FunctionV0 : public Function<dim>
   {
   public:
     FunctionV0() = default;
-
     virtual double
-    value(const Point<dim> & /*p*/,
-          const unsigned int /*component*/ = 0) const override
-    {
-      return 0.0; // Starts from rest
-    }
+    value(const Point<dim> &p, const unsigned int = 0) const override;
   };
 
-  // Wrap a lambda into a dealii::Function
+  // Wrap a space-time lambda into a dealii::Function (time read via get_time()).
   class LambdaFunction : public Function<dim>
   {
   public:
@@ -87,16 +75,16 @@ public:
     }
   };
 
-
-  // Constructor
-  WaveEquation(const std::string                                       &mesh_file_name_,
-               const unsigned int                                      &r_,
-               const double                                            &T_,
-               const double                                            &delta_t_,
-               const double                                            &theta_,
-               const std::function<double(const Point<dim> &)>         &rho_,
-               const std::function<double(const Point<dim> &)>         &c_,
-               const std::function<double(const Point<dim> &, const double &)> &f_)
+  // Constructor.
+  WaveEquation(const std::string                                               &mesh_file_name_,
+               const unsigned int                                              &r_,
+               const double                                                    &T_,
+               const double                                                    &delta_t_,
+               const double                                                    &theta_,
+               const std::function<double(const Point<dim> &)>                 &rho_,
+               const std::function<double(const Point<dim> &)>                 &c_,
+               const std::function<double(const Point<dim> &, const double &)> &f_,
+               const unsigned int                                               n_subdivisions_ = 50)
     : mesh_file_name(mesh_file_name_)
     , r(r_)
     , T(T_)
@@ -105,12 +93,18 @@ public:
     , rho(rho_)
     , c(c_)
     , f(f_)
+    , n_subdivisions(n_subdivisions_)
     , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
     , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
     , pcout(std::cout, mpi_rank == 0)
     , mesh(MPI_COMM_WORLD)
   {}
 
+  // Compute the error against a given exact solution.
+  double
+  compute_error(const VectorTools::NormType &norm_type,
+                const Function<dim>         &exact_solution) const;
+                
   // Run the time-dependent simulation.
   void
   run();
@@ -143,13 +137,15 @@ protected:
   const double delta_t;
   const double theta;
 
-  double time = 0.0;
-  unsigned int timestep_number = 0;
-
   // Physical properties
   std::function<double(const Point<dim> &)> rho;
   std::function<double(const Point<dim> &)> c;
   std::function<double(const Point<dim> &, const double &)> f;
+
+  const unsigned int n_subdivisions;
+
+  double time = 0.0;
+  unsigned int timestep_number = 0;
 
   // MPI and Output
   const unsigned int mpi_size;
@@ -160,14 +156,15 @@ protected:
   parallel::fullydistributed::Triangulation<dim> mesh;
   std::unique_ptr<FiniteElement<dim>> fe;
   std::unique_ptr<Quadrature<dim>> quadrature;
+  std::unique_ptr<Mapping<dim>> mapping;
   DoFHandler<dim> dof_handler;
 
   // Linear Algebra Objects
-  AffineConstraints<double> constraints;           // For managing Dirichlet BCs and hanging nodes
+  AffineConstraints<double> constraints;
   TrilinosWrappers::SparseMatrix mass_matrix;      // M
   TrilinosWrappers::SparseMatrix stiffness_matrix; // K
-  TrilinosWrappers::SparseMatrix system_matrix;    // M + (dt^2/4)*K
-  TrilinosWrappers::MPI::Vector system_rhs;        // RHS for the linear system
+  TrilinosWrappers::SparseMatrix matrix_u;         // M + theta^2*dt^2*K  (assembled once, with Dirichlet BCs)
+  TrilinosWrappers::SparseMatrix matrix_v;         // M                   (assembled once, with Dirichlet BCs)
 
   // Kinematic state vectors (owned for solving, full for evaluation/output)
   TrilinosWrappers::MPI::Vector solution_owned, solution;           // U_{n+1}
