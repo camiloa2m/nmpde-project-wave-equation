@@ -37,3 +37,6 @@
 
 # MacOS metadata files
 *.DS_Store
+
+# Core dumps
+core
