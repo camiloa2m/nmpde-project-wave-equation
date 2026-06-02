@@ -1,5 +1,21 @@
 #include "WaveEquation.hpp"
 
+// Initial displacement: Gaussian pulse centered at (0.5, 0.5).
+// Gaussian pulse: u_0(x,y) = exp(-100 * ((x-0.5)^2 + (y-0.5)^2)).
+double
+WaveEquation::FunctionU0::value(const Point<dim> &p, const unsigned int) const
+{
+  const double d2 = (p[0]-0.5)*(p[0]-0.5) + (p[1]-0.5)*(p[1]-0.5);
+  return std::exp(-100.0 * d2);
+}
+
+// Initial velocity: starts from rest.
+double
+WaveEquation::FunctionV0::value(const Point<dim> & /*p*/, const unsigned int) const
+{
+  return 0.0;
+}
+
 // Main function.
 int main(int argc, char *argv[])
 {
