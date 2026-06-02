@@ -33,4 +33,7 @@
 *.out
 *.app
 
-*/build/*
+**/build/*
+
+# MacOS metadata files
+*.DS_Store
