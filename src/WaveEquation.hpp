@@ -84,7 +84,8 @@ public:
                const std::function<double(const Point<dim> &)>                 &rho_,
                const std::function<double(const Point<dim> &)>                 &c_,
                const std::function<double(const Point<dim> &, const double &)> &f_,
-               const unsigned int                                               n_subdivisions_ = 50)
+               const unsigned int                                               n_subdivisions_ = 50,
+               const std::string                                               &output_dir_     = "./results")
     : mesh_file_name(mesh_file_name_)
     , r(r_)
     , T(T_)
@@ -94,6 +95,7 @@ public:
     , c(c_)
     , f(f_)
     , n_subdivisions(n_subdivisions_)
+    , output_dir(output_dir_)
     , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
     , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
     , pcout(std::cout, mpi_rank == 0)
@@ -143,6 +145,7 @@ protected:
   std::function<double(const Point<dim> &, const double &)> f;
 
   const unsigned int n_subdivisions;
+  const std::string output_dir;
 
   double time = 0.0;
   unsigned int timestep_number = 0;
