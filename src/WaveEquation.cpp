@@ -312,9 +312,16 @@ void WaveEquation::output() const
   data_out.build_patches();
 
   const std::filesystem::path mesh_path(mesh_file_name);
+
+  // Create one directory per mesh size: <output_dir>/N4, <output_dir>/N8, ...
+  const std::filesystem::path out_dir =
+    std::filesystem::path(output_dir) / ("N" + std::to_string(n_subdivisions));
+
+  std::filesystem::create_directories(out_dir);
+
   const std::string output_file_name = "output-" + mesh_path.stem().string();
 
-  data_out.write_vtu_with_pvtu_record("./", output_file_name, timestep_number, MPI_COMM_WORLD);
+  data_out.write_vtu_with_pvtu_record(out_dir.string() + "/", output_file_name, timestep_number, MPI_COMM_WORLD);
 }
 
 void WaveEquation::run()
@@ -323,7 +330,6 @@ void WaveEquation::run()
   // M and K are constant in time for this problem, so we assemble them once.
   // If the problem had time-dependent coefficients or nonlinear terms appear, 
   // we would need to reassemblethese matrices at each timestep.
-  // 
   assemble_matrices();
 
   output(); // Output initial state (t=0)
@@ -338,7 +344,7 @@ void WaveEquation::run()
     compute_energy();
     
     // Output periodically to save disk space if delta_t is very small
-    if (timestep_number % 10 == 0) {
+    if (timestep_number % 2 == 0) {
       output();
     }
   }
