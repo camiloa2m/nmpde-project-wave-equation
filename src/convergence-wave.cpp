@@ -80,10 +80,10 @@ int main(int argc, char *argv[])
       const double h = 1.0 / N;
       // Use dt ~ h in the convergence study so temporal error stays comparable
       // to spatial error and does not dominate for large N.
-      // For Crank–Nicolson, this keeps the time error O(h^2).
+      // For Crank–Nicolson, this keeps the time discretization error O(h^2).
       const double delta_t = 0.5 * h;
 
-      WaveEquation problem("mms", r, T, delta_t, theta, rho, c, f, N);
+      WaveEquation problem("mms", r, T, delta_t, theta, rho, c, f, N, "./results-convergence");
       problem.run();
 
       // Compare solution at final time T with the initial condition at t=0.
@@ -93,7 +93,7 @@ int main(int argc, char *argv[])
       ExactSolution exact_t0;
       exact_t0.set_time(0.0);
       const double eL2_t0 = problem.compute_error(VectorTools::L2_norm, exact_t0);
-      std::cout << "[Info] N=" << N
+      std::cout << "[Sanity check] N=" << N
                 << "; ||u_h - u(t=0)||=" << eL2_t0 << std::endl
                 << "  (~0 -> solver stuck at t=0, O(1) -> time evolution OK)"
                 << std::endl;
