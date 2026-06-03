@@ -51,11 +51,13 @@ int main(int argc, char *argv[])
       /* mesh_file_name = */ "wave_domain.msh", // Used for output naming since we generate the mesh internally
       /* degree         = */ 1,                 // Polynomial degree (p=1 for linear elements)
       /* T              = */ 2.0,               // Final time. T=2.0 is enough to see the wave hit boundaries and reflect
-      /* delta_t        = */ 0.005,             // Time step. 
+      /* delta_t        = */ 0.01,              // Time step.
       /* theta          = */ theta,             // Theta parameter for the time-stepping scheme (theta method)
       rho,
       c,
-      f
+      f,
+      /* n_subdivisions = */ 50,
+      /* output_dir     = */ "./results-exercise"
   );
 
   // Execute the simulation
