@@ -297,6 +297,55 @@ WaveEquation::compute_error(const VectorTools::NormType &norm_type,
   return VectorTools::compute_global_error(mesh, error_per_cell, norm_type);
 }
 
+double
+WaveEquation::compute_energy_norm_error(const Function<dim> &exact_u,
+                                         const Function<dim> &exact_v) const
+{
+  const QGaussSimplex<dim> quadrature_error(r + 2);
+  FEValues<dim> fe_values(*mapping, *fe, quadrature_error,
+                           update_values | update_gradients |
+                           update_quadrature_points | update_JxW_values);
+
+  const unsigned int n_q = quadrature_error.size();
+  std::vector<Tensor<1, dim>> grad_uh(n_q);
+  std::vector<double>         vh(n_q);
+  std::vector<double>         exact_v_values(n_q);
+
+  double potential_energy_error = 0.0; // 0.5 * int c^2 |grad(u - u_h)|^2
+  double kinetic_energy_error   = 0.0; // 0.5 * int rho |v - v_h|^2
+
+  for (const auto &cell : dof_handler.active_cell_iterators())
+    {
+      if (!cell->is_locally_owned())
+        continue;
+
+      fe_values.reinit(cell);
+      fe_values.get_function_gradients(solution, grad_uh);
+      fe_values.get_function_values(velocity, vh);
+      exact_v.value_list(fe_values.get_quadrature_points(), exact_v_values);
+
+      for (unsigned int q = 0; q < n_q; ++q)
+        {
+          const double c_val   = c(fe_values.quadrature_point(q));
+          const double rho_val = rho(fe_values.quadrature_point(q));
+
+          const Tensor<1, dim> grad_e_u =
+            exact_u.gradient(fe_values.quadrature_point(q)) - grad_uh[q];
+          const double e_v = exact_v_values[q] - vh[q];
+
+          potential_energy_error +=
+            0.5 * c_val * c_val * (grad_e_u * grad_e_u) * fe_values.JxW(q);
+          kinetic_energy_error += 0.5 * rho_val * e_v * e_v * fe_values.JxW(q);
+        }
+    }
+
+  const double local_energy_error_sq = potential_energy_error + kinetic_energy_error;
+  const double global_energy_error_sq =
+    Utilities::MPI::sum(local_energy_error_sq, MPI_COMM_WORLD);
+
+  return std::sqrt(global_energy_error_sq);
+}
+
 
 void WaveEquation::output() const
 {
@@ -313,7 +362,7 @@ void WaveEquation::output() const
 
   const std::filesystem::path mesh_path(mesh_file_name);
 
-  // Create one directory per mesh size: <output_dir>/N4, <output_dir>/N8, ...
+  // One directory per mesh size: <output_dir>/N4, <output_dir>/N8, ...
   const std::filesystem::path out_dir =
     std::filesystem::path(output_dir) / ("N" + std::to_string(n_subdivisions));
 
@@ -332,7 +381,8 @@ void WaveEquation::run()
   // we would need to reassemblethese matrices at each timestep.
   assemble_matrices();
 
-  output(); // Output initial state (t=0)
+  if (enable_output)
+    output(); // Output initial state (t=0)
   compute_energy();
 
   while (time < T - 0.5 * delta_t) {
@@ -342,9 +392,9 @@ void WaveEquation::run()
     pcout << "Timestep " << timestep_number << " at t = " << time << std::endl;
     solve_timestep();
     compute_energy();
-    
+
     // Output periodically to save disk space if delta_t is very small
-    if (timestep_number % 2 == 0) {
+    if (enable_output && timestep_number % 2 == 0) {
       output();
     }
   }
