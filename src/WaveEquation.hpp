@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 
 using namespace dealii;
 
@@ -119,6 +120,25 @@ public:
   void
   run();
 
+  // True if the blow-up guard stopped run() early instead of reaching T.
+  bool
+  blew_up() const { return blowup_triggered; }
+
+  // Time the blow-up guard triggered. Meaningless unless blew_up() is true.
+  double
+  blowup_time() const { return blowup_time_value; }
+
+  // Log energy per timestep to output_dir/csv_name (columns: t,energy).
+  // Call before run(); at the end run() also prints E^0, max/min energy
+  // and the relative variation.
+  void
+  enable_energy_log(const std::string &csv_name);
+
+  // Stop run() early if E^n > blowup_factor * E^0, for unstable schemes
+  // (e.g. theta=0). Call before run().
+  void
+  enable_blowup_guard(const double blowup_factor);
+
 protected:
   // Initialization of mesh, FE space, DoFs, and linear algebra objects.
   void
@@ -132,9 +152,10 @@ protected:
   void
   solve_timestep();
 
-  // Computes and prints the total mechanical energy E_n.
-  void
-  compute_energy() const;
+  // Computes and prints the total mechanical energy E_n, logging it to
+  // the CSV file if enabled.
+  double
+  compute_energy();
 
   // Output to VTU/PVTU.
   void
@@ -190,6 +211,20 @@ private:
   TrilinosWrappers::MPI::Vector rhs_owned;
   TrilinosWrappers::MPI::Vector tmp_owned;
   TrilinosWrappers::MPI::Vector force_terms;
+
+  // Energy CSV logging state, see enable_energy_log().
+  bool energy_log_enabled = false;
+  std::string energy_log_path;
+  std::ofstream energy_log_stream;
+  double energy_initial = 0.0;
+  double energy_max = -std::numeric_limits<double>::infinity();
+  double energy_min = std::numeric_limits<double>::infinity();
+
+  // Blow-up guard state, see enable_blowup_guard().
+  bool blowup_guard_enabled = false;
+  double blowup_factor = 0.0;
+  bool blowup_triggered = false;
+  double blowup_time_value = 0.0;
 };
 
 #endif
