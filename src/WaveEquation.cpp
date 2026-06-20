@@ -1,5 +1,6 @@
 #include "WaveEquation.hpp"
 #include <cmath>
+#include <iomanip>
 
 void WaveEquation::setup()
 {
@@ -47,32 +48,28 @@ void WaveEquation::setup()
   const IndexSet locally_owned_dofs = dof_handler.locally_owned_dofs();
   const IndexSet locally_relevant_dofs = DoFTools::extract_locally_relevant_dofs(dof_handler);
 
-  // Use of constraints to manage Dirichlet boundary conditions efficiently, 
-  // deal.II v9.6: Streamlined constraints.
   constraints.clear();
   DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-  // Dirichlet Condition: u = g (Defined here strongly)
   Functions::ZeroFunction<dim> g; // Homogeneous Dirichlet BCs.
-  // WaveEquation::FunctionG g; // Function<dim> providing boundary values
   VectorTools::interpolate_boundary_values(dof_handler,
                                             0, // Boundary ID
                                             g, // value g
                                             constraints);
   constraints.close();
-  // M and K are assembled WITHOUT constraints (pure FE matrices) and are used
-  // only for matrix-vector products when building the RHS. The system matrices
-  // matrix_u = M + theta^2*dt^2*K and matrix_v = M are assembled WITH the
-  // Dirichlet constraints (via distribute_local_to_global), so each constrained
-  // DOF gets a single identity row. The RHS gets constraints.set_zero each step.
+  // M and K are assembled WITHOUT constraints (pure FE matrices), used only
+  // for matrix-vector products when building the RHS. matrix_u and matrix_v
+  // are assembled WITH the Dirichlet constraints (via
+  // distribute_local_to_global), giving each constrained DOF a single
+  // identity row; the RHS then gets constraints.set_zero each step.
 
-  // Full pattern (no constraints) for the pure FE matrices M and K: they are
-  // assembled with raw .add() and so need entries at constrained rows too.
+  // Full pattern (no constraints) for M and K: assembled with raw .add(),
+  // so they need entries at constrained rows too.
   TrilinosWrappers::SparsityPattern sparsity_full(locally_owned_dofs, MPI_COMM_WORLD);
   DoFTools::make_sparsity_pattern(dof_handler, sparsity_full);
   sparsity_full.compress();
 
-  // Constrained pattern for the system matrices matrix_u and matrix_v, which are
-  // assembled via distribute_local_to_global (condenses constrained entries).
+  // Constrained pattern for matrix_u and matrix_v, assembled via
+  // distribute_local_to_global (condenses constrained entries).
   TrilinosWrappers::SparsityPattern sparsity_constrained(locally_owned_dofs, MPI_COMM_WORLD);
   DoFTools::make_sparsity_pattern(dof_handler, sparsity_constrained, constraints, false);
   sparsity_constrained.compress();
@@ -145,8 +142,7 @@ void WaveEquation::assemble_matrices()
         }
       }
     }
-    // Neumann BCs if needed can be added here.
-    // Current implementation assumes homogeneous Neumann (natural) BCs, so no additional terms are added.
+    // Homogeneous Neumann (natural) BCs, so no boundary term to add here.
 
     // Local system matrices: U-system is M + theta^2*dt^2*K, V-system is M.
     cell_u = cell_mass;
@@ -164,10 +160,8 @@ void WaveEquation::assemble_matrices()
           stiffness_matrix.add(dof_indices[i], dof_indices[j], cell_stiffness(i, j));
         }
 
-    // matrix_u and matrix_v are assembled WITH the Dirichlet constraints so each
-    // constrained DOF gets a single identity row.
-    // Local contributions are inserted into the global matrices consistently with 
-    // the affine constraints.
+    // matrix_u and matrix_v are assembled WITH the Dirichlet constraints, so
+    // each constrained DOF gets a single identity row.
     constraints.distribute_local_to_global(cell_u, dof_indices, matrix_u);
     constraints.distribute_local_to_global(cell_v, dof_indices, matrix_v);
   }
@@ -193,11 +187,9 @@ void WaveEquation::solve_timestep()
   VectorTools::create_right_hand_side(*mapping, dof_handler, quadrature_rhs, ff, tmp_owned);
   force_terms.add((1.0 - theta) * delta_t, tmp_owned);
 
-  // -----------------------------------------------------------------------
-  // Step 1: solve for U^{n+1}
+  // Step 1: solve for U^{n+1}.
   // RHS = M*U^n + dt*M*V^n - theta*(1-theta)*dt^2*K*U^n + theta*dt*forcing_terms
   // System: (M + theta^2*dt^2*K) * U^{n+1} = RHS
-  // -----------------------------------------------------------------------
   mass_matrix.vmult(rhs_owned, old_solution_owned);
 
   mass_matrix.vmult(tmp_owned, old_velocity_owned);
@@ -208,9 +200,8 @@ void WaveEquation::solve_timestep()
 
   rhs_owned.add(theta * delta_t, force_terms);
 
-  // matrix_u (= M + theta^2*dt^2*K, with Dirichlet identity rows) was assembled
-  // once in assemble_matrices(). Zero the RHS at constrained DOFs so the system
-  // is consistent with those identity rows (homogeneous Dirichlet => value 0).
+  // matrix_u has Dirichlet identity rows (assembled once in assemble_matrices());
+  // zero the RHS at those DOFs to match (homogeneous Dirichlet => value 0).
   constraints.set_zero(rhs_owned);
 
   {
@@ -225,11 +216,9 @@ void WaveEquation::solve_timestep()
 
   solution = solution_owned;
 
-  // -----------------------------------------------------------------------
-  // Step 2: solve for V^{n+1}, using already-computed U^{n+1}
+  // Step 2: solve for V^{n+1}, using the already-computed U^{n+1}.
   // RHS = -theta*dt*K*U^{n+1} + M*V^n - (1-theta)*dt*K*U^n + forcing_terms
   // System: M * V^{n+1} = RHS
-  // -----------------------------------------------------------------------
   stiffness_matrix.vmult(rhs_owned, solution_owned);
   rhs_owned *= -theta * delta_t;
 
@@ -241,8 +230,7 @@ void WaveEquation::solve_timestep()
 
   rhs_owned += force_terms;
 
-  // matrix_v (= M, with Dirichlet identity rows) was assembled once. Zero the
-  // constrained RHS entries to keep the system consistent.
+  // matrix_v (= M, with Dirichlet identity rows) was assembled once too.
   constraints.set_zero(rhs_owned);
 
   {
@@ -264,18 +252,49 @@ void WaveEquation::solve_timestep()
   old_velocity       = velocity_owned;
 }
 
-void WaveEquation::compute_energy() const 
+double WaveEquation::compute_energy()
 {
   // Energy = 0.5 * V^T * M * V + 0.5 * U^T * K * U
   TrilinosWrappers::MPI::Vector tmp(old_solution_owned.locally_owned_elements(), MPI_COMM_WORLD);
-  
+
   mass_matrix.vmult(tmp, old_velocity_owned);
   double kinetic = 0.5 * (old_velocity_owned * tmp);
-  
+
   stiffness_matrix.vmult(tmp, old_solution_owned);
   double potential = 0.5 * (old_solution_owned * tmp);
-  
-  pcout << "  Energy: " << kinetic + potential << std::endl;
+
+  const double energy = kinetic + potential;
+  pcout << "  Energy: " << energy << std::endl;
+
+  if (energy_log_enabled && mpi_rank == 0)
+    {
+      energy_log_stream << time << "," << std::setprecision(16) << energy << "\n";
+      energy_max = std::max(energy_max, energy);
+      energy_min = std::min(energy_min, energy);
+    }
+
+  return energy;
+}
+
+void WaveEquation::enable_blowup_guard(const double blowup_factor_)
+{
+  blowup_guard_enabled = true;
+  blowup_factor = blowup_factor_;
+}
+
+void WaveEquation::enable_energy_log(const std::string &csv_path)
+{
+  energy_log_enabled = true;
+
+  const std::filesystem::path out_dir(output_dir);
+  energy_log_path = (out_dir / csv_path).string();
+
+  if (mpi_rank == 0)
+    {
+      std::filesystem::create_directories(out_dir);
+      energy_log_stream.open(energy_log_path);
+      energy_log_stream << "t,energy\n";
+    }
 }
 
 
@@ -376,14 +395,15 @@ void WaveEquation::output() const
 void WaveEquation::run()
 {
   setup();
-  // M and K are constant in time for this problem, so we assemble them once.
-  // If the problem had time-dependent coefficients or nonlinear terms appear, 
-  // we would need to reassemblethese matrices at each timestep.
+  // M and K are constant in time here, so assemble them once. Time-dependent
+  // coefficients or nonlinear terms would require reassembling each timestep.
   assemble_matrices();
 
   if (enable_output)
     output(); // Output initial state (t=0)
-  compute_energy();
+  const double e0 = compute_energy();
+  if (energy_log_enabled)
+    energy_initial = e0;
 
   while (time < T - 0.5 * delta_t) {
     time += delta_t;
@@ -391,11 +411,33 @@ void WaveEquation::run()
 
     pcout << "Timestep " << timestep_number << " at t = " << time << std::endl;
     solve_timestep();
-    compute_energy();
+    const double energy_n = compute_energy();
 
     // Output periodically to save disk space if delta_t is very small
     if (enable_output && timestep_number % 2 == 0) {
       output();
     }
+
+    if (blowup_guard_enabled && energy_n > blowup_factor * e0) {
+      blowup_triggered = true;
+      blowup_time_value = time;
+      pcout << "[Blow-up guard] E^n = " << energy_n << " exceeded "
+            << blowup_factor << " * E^0 at t = " << time
+            << " -- stopping early." << std::endl;
+      break;
+    }
   }
+
+  if (energy_log_enabled)
+    {
+      energy_log_stream.close();
+      const double rel_variation = (energy_max - energy_min) / energy_initial;
+      pcout << "===============================================" << std::endl;
+      pcout << "Energy log written to " << energy_log_path << std::endl;
+      pcout << "  E^0            = " << energy_initial << std::endl;
+      pcout << "  max(E^n)       = " << energy_max << std::endl;
+      pcout << "  min(E^n)       = " << energy_min << std::endl;
+      pcout << "  (max-min)/E^0  = " << rel_variation << std::endl;
+      pcout << "===============================================" << std::endl;
+    }
 }
