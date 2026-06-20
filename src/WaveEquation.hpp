@@ -85,7 +85,8 @@ public:
                const std::function<double(const Point<dim> &)>                 &c_,
                const std::function<double(const Point<dim> &, const double &)> &f_,
                const unsigned int                                               n_subdivisions_ = 50,
-               const std::string                                               &output_dir_     = "./results")
+               const std::string                                               &output_dir_     = "./results",
+               const bool                                                       enable_output_  = true)
     : mesh_file_name(mesh_file_name_)
     , r(r_)
     , T(T_)
@@ -96,6 +97,7 @@ public:
     , f(f_)
     , n_subdivisions(n_subdivisions_)
     , output_dir(output_dir_)
+    , enable_output(enable_output_)
     , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
     , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
     , pcout(std::cout, mpi_rank == 0)
@@ -106,7 +108,13 @@ public:
   double
   compute_error(const VectorTools::NormType &norm_type,
                 const Function<dim>         &exact_solution) const;
-                
+
+  // Energy-norm error against exact u and v = du/dt, same rho/c
+  // weighting as compute_energy().
+  double
+  compute_energy_norm_error(const Function<dim> &exact_u,
+                             const Function<dim> &exact_v) const;
+
   // Run the time-dependent simulation.
   void
   run();
@@ -146,6 +154,8 @@ protected:
 
   const unsigned int n_subdivisions;
   const std::string output_dir;
+  // If false, run() skips VTU/PVTU writes (used in convergence studies).
+  const bool enable_output;
 
   double time = 0.0;
   unsigned int timestep_number = 0;
