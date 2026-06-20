@@ -8,3 +8,6 @@ deal_ii_setup_target(exercise-wave)
 
 add_executable(convergence-wave src/convergence-wave.cpp src/WaveEquation.cpp)
 deal_ii_setup_target(convergence-wave)
+
+add_executable(energy-wave src/energy-wave.cpp src/WaveEquation.cpp)
+deal_ii_setup_target(energy-wave)
