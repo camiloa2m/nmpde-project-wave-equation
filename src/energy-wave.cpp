@@ -141,16 +141,26 @@ main(int argc, char *argv[])
   std::cout << "[Info] omega = pi*sqrt(2) = " << omega
             << " (homogeneous case, f == 0)" << std::endl;
 
+  bool with_theta1 = false;
+  bool with_theta0 = false;
+  for (int i = 1; i < argc; ++i)
+    {
+      if (std::string(argv[i]) == "--with-theta1")
+        with_theta1 = true;
+      else if (std::string(argv[i]) == "--with-theta0")
+        with_theta0 = true;
+    }
+
   // Primary case: Crank-Nicolson (theta = 0.5).
   run_case(0.5, "energy_homogeneous.csv");
 
   // Optional comparison: implicit Euler (theta = 1.0).
-  if (argc > 1 && std::string(argv[1]) == "--with-theta1")
+  if (with_theta1)
     run_case(1.0, "energy_theta1.csv");
 
   // theta = 0 (fully explicit) is only conditionally stable: run at two
   // time steps to observe/quantify the expected instability.
-  if (argc > 1 && std::string(argv[1]) == "--with-theta0")
+  if (with_theta0)
     {
       run_theta0_case(0.005, "energy_theta0_dt005.csv");
       run_theta0_case(0.05, "energy_theta0_dt05.csv");
