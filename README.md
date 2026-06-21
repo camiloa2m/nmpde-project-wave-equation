@@ -68,3 +68,25 @@ $ python3 scripts/plot_energy.py
 $ python3 scripts/plot_energy_theta0_instability.py
 $ python3 scripts/plot_energy.py --data-dir results/energy --out-dir scripts/out  # explicit dirs
 ```
+
+### Dispersion study (`dispersion-wave`)
+`dispersion-wave` measures numerical phase (dispersion) error for a
+prescribed plane wave. It performs three experiments:
+
+- spatial sweep (Experiment 1)
+- temporal sweep (Experiment 2)
+- cancellation sweep (Experiment 3)
+
+Each experiment may be executed for the axis-aligned and diagonal
+propagation directions where applicable. The study writes phase-error CSVs
+into the chosen output directory.
+
+Run the helper script:
+```bash
+$ ./run_dispersion_study.sh [build_dir] [out_dir] [experiment] [np]
+```
+Examples:
+```bash
+$ ./run_dispersion_study.sh build results/dispersion                # all experiments, single rank
+$ ./run_dispersion_study.sh build results/dispersion spatial 4      # spatial experiment, 4 MPI ranks
+```
