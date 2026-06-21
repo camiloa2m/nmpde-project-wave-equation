@@ -9,8 +9,6 @@
 #include <sstream>
 #include <string>
 
-using namespace dealii;
-
 // Manufactured solution:
 //   u(x,y,t) = sin(pi*x) * sin(pi*y) * cos(omega*t)
 //

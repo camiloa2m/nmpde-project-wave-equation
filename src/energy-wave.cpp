@@ -7,8 +7,6 @@
 #include <sstream>
 #include <string>
 
-using namespace dealii;
-
 // Long-time discrete energy check for the homogeneous manufactured-solution
 // case (f == 0): omega = pi*sqrt(2), u0(x,y) = sin(pi*x)*sin(pi*y), u1 = 0.
 //
