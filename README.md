@@ -17,10 +17,10 @@ $ cd build
 $ cmake ..
 $ make
 ```
-Three executables are produced in `build`:
-- `exercise-wave` — Gaussian-pulse demo on the unit square (homogeneous Dirichlet BCs, reflecting boundaries).
-- `convergence-wave` — manufactured-solution spatial/temporal convergence study (Q1, theta=0.5).
-- `energy-wave` — discrete energy conservation/instability study for the theta-method time-stepping scheme.
+This produces three executables in `build`:
+- `exercise-wave`: Gaussian-pulse demo on the unit square, homogeneous Dirichlet BCs with reflecting boundaries.
+- `convergence-wave`: manufactured-solution convergence study, spatial and temporal sweeps, P1 with theta=0.5.
+- `energy-wave`: discrete energy conservation/instability study for the theta-method time-stepping scheme.
 
 Each can be run from `build` with
 ```bash
@@ -28,17 +28,43 @@ $ ./executable-name
 ```
 
 ### Convergence study (`convergence-wave`)
-`run_convergence_study.sh` runs `convergence-wave` across both spatial (h) and temporal (dt) sweeps, for the homogeneous (`omega = pi*sqrt(2)`, `f == 0`) and forced (`omega = 2*pi`, `f != 0`) manufactured-solution cases:
+`run_convergence_study.sh` runs `convergence-wave` through both the spatial (h) and temporal (dt) sweeps, for two manufactured-solution cases: homogeneous (`omega = pi*sqrt(2)`, `f == 0`) and forced (`omega = 2*pi`, `f != 0`).
 ```bash
 $ ./run_convergence_study.sh [build_dir] [out_dir]
 ```
-Produces `convergence_spatial_omega<value>.csv` / `convergence_temporal_omega<value>.csv` in `out_dir`. Results and the `plot_convergence.py` plotting script live in `results/convergence/`.
+For example:
+```bash
+$  ./run_convergence_study.sh build results/convergence
+```
+
+This writes `convergence_spatial_omega<value>.csv` and `convergence_temporal_omega<value>.csv` to `out_dir`. The plotting script, `plot_convergence.py`, lives in `scripts/` and reads from `results/convergence/` by default:
+```bash
+$ python3 scripts/plot_convergence.py                                       # reads and writes results/convergence/
+$ python3 scripts/plot_convergence.py --data-dir results/convergence --out-dir scripts/out  # explicit dirs
+```
 
 ### Energy study (`energy-wave`)
-`energy-wave` logs the discrete energy `E^n = 0.5*(V^n)^T*M*V^n + 0.5*(U^n)^T*K*U^n` at every timestep for the homogeneous case (mesh `h=1/64`, `dt=0.02`, `T_final=35` unless noted), writing CSVs under `results/energy/`:
+`energy-wave` logs the discrete energy `E^n = 0.5*(V^n)^T*M*V^n + 0.5*(U^n)^T*K*U^n` at every timestep for the homogeneous case (mesh `h=1/64`, `dt=0.02`, `T_final=35` unless noted), writing CSVs under `results/energy/` relative to the working directory:
 ```bash
-$ ./energy-wave                 # theta=0.5 (Crank-Nicolson) only -> energy_homogeneous.csv
-$ ./energy-wave --with-theta1   # also runs theta=1.0 (Implicit Euler) -> energy_theta1.csv
-$ ./energy-wave --with-theta0   # also runs theta=0 (explicit) instability check at dt=0.005/0.05
+$ ./energy-wave                                  # theta=0.5 (Crank-Nicolson) only -> energy_homogeneous.csv
+$ ./energy-wave --with-theta1                    # also runs theta=1.0 (Implicit Euler) -> energy_theta1.csv
+$ ./energy-wave --with-theta0                    # also runs theta=0 (explicit) instability check at dt=0.005/0.05
+$ ./energy-wave --with-theta1 --with-theta0      # both flags can be combined
 ```
-The theta=0 runs use a blow-up guard that stops early once `E^n` exceeds 100x its initial value (theta=0 is only conditionally stable). Plotting scripts (`plot_energy.py`, `plot_energy_theta0_instability.py`) and resulting PNGs live alongside the CSVs in `results/energy/`.
+theta=0 is only conditionally stable, so those runs use a blow-up guard that stops early once `E^n` exceeds 100x its initial value.
+
+`run_energy_study.sh` wraps `energy-wave` the same way `run_convergence_study.sh` wraps `convergence-wave`: it builds the binary if needed, then runs it once with both flags, writing all 4 CSVs straight into `out_dir`.
+```bash
+$ ./run_energy_study.sh [build_dir] [out_dir]
+```
+For example:
+```bash
+$ ./run_energy_study.sh build results/energy
+```
+
+The plotting scripts `plot_energy.py` and `plot_energy_theta0_instability.py` live in `scripts/` and read from `results/energy/` by default:
+```bash
+$ python3 scripts/plot_energy.py
+$ python3 scripts/plot_energy_theta0_instability.py
+$ python3 scripts/plot_energy.py --data-dir results/energy --out-dir scripts/out  # explicit dirs
+```
