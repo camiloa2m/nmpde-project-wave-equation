@@ -51,16 +51,34 @@ void WaveEquation::setup()
   constraints.clear();
   DoFTools::make_hanging_node_constraints(dof_handler, constraints);
   Functions::ZeroFunction<dim> g; // Homogeneous Dirichlet BCs.
+  std::map<types::global_dof_index, double> boundary_values_map;
   VectorTools::interpolate_boundary_values(dof_handler,
                                             0, // Boundary ID
                                             g, // value g
-                                            constraints);
+                                            boundary_values_map);
+  for (const auto &entry : boundary_values_map)
+    constraints.add_line(entry.first);
   constraints.close();
   // M and K are assembled WITHOUT constraints (pure FE matrices), used only
   // for matrix-vector products when building the RHS. matrix_u and matrix_v
   // are assembled WITH the Dirichlet constraints (via
   // distribute_local_to_global), giving each constrained DOF a single
-  // identity row; the RHS then gets constraints.set_zero each step.
+  // identity row. The constraint PATTERN is fixed here and reused every
+  // timestep, but since boundary_g/boundary_dgdt can be time-dependent
+  // while matrix_u/matrix_v are assembled only once, the prescribed VALUE
+  // is written into the RHS directly each step instead (see solve_timestep()).
+
+  // Record (dof, support point) for every locally-owned Dirichlet-boundary
+  // DOF, so solve_timestep() can evaluate boundary_g/boundary_dgdt there
+  // without repeating the boundary search.
+  {
+    std::vector<Point<dim>> support_points(dof_handler.n_dofs());
+    DoFTools::map_dofs_to_support_points(*mapping, dof_handler, support_points);
+    boundary_dofs.clear();
+    for (const auto &entry : boundary_values_map)
+      if (locally_owned_dofs.is_element(entry.first))
+        boundary_dofs.emplace_back(entry.first, support_points[entry.first]);
+  }
 
   // Full pattern (no constraints) for M and K: assembled with raw .add(),
   // so they need entries at constrained rows too.
@@ -102,6 +120,19 @@ void WaveEquation::setup()
 
   VectorTools::project(*mapping, dof_handler, constraints, QGaussSimplex<dim>(r + 2), u_0, old_solution_owned);
   VectorTools::project(*mapping, dof_handler, constraints, QGaussSimplex<dim>(r + 2), v_0, old_velocity_owned);
+
+  // The projection above used the homogeneous-Dirichlet `constraints`
+  // object, so boundary DOFs are left at 0. Overwrite them with the
+  // prescribed g(x,0)/dg_dt(x,0) so the initial state matches the
+  // boundary data solve_timestep() uses from t=0 onward.
+  if (boundary_g)
+    for (const auto &[dof, point] : boundary_dofs)
+      old_solution_owned(dof) = boundary_g(point, 0.0);
+  if (boundary_dgdt)
+    for (const auto &[dof, point] : boundary_dofs)
+      old_velocity_owned(dof) = boundary_dgdt(point, 0.0);
+  old_solution_owned.compress(VectorOperation::insert);
+  old_velocity_owned.compress(VectorOperation::insert);
 
   old_solution = old_solution_owned;
   old_velocity = old_velocity_owned;
@@ -172,6 +203,17 @@ void WaveEquation::assemble_matrices()
   matrix_v.compress(VectorOperation::add);
 }
 
+void WaveEquation::apply_dirichlet_value(
+  const std::vector<std::pair<types::global_dof_index, Point<dim>>> &dofs,
+  const std::function<double(const Point<dim> &, const double &)>   &value_fn,
+  const double                                                        t,
+  TrilinosWrappers::MPI::Vector                                       &rhs)
+{
+  for (const auto &[dof, point] : dofs)
+    rhs(dof) = value_fn ? value_fn(point, t) : 0.0;
+  rhs.compress(VectorOperation::insert);
+}
+
 void WaveEquation::solve_timestep()
 {
   const QGaussSimplex<dim> quadrature_rhs(r + 2);
@@ -201,8 +243,8 @@ void WaveEquation::solve_timestep()
   rhs_owned.add(theta * delta_t, force_terms);
 
   // matrix_u has Dirichlet identity rows (assembled once in assemble_matrices());
-  // zero the RHS at those DOFs to match (homogeneous Dirichlet => value 0).
-  constraints.set_zero(rhs_owned);
+  // overwrite the RHS at those DOFs with U's boundary value at t^{n+1} = time.
+  apply_dirichlet_value(boundary_dofs, boundary_g, time, rhs_owned);
 
   {
     TrilinosWrappers::PreconditionSSOR prec;
@@ -210,7 +252,10 @@ void WaveEquation::solve_timestep()
     SolverControl sc(1000, 1e-8 * rhs_owned.l2_norm());
     SolverCG<TrilinosWrappers::MPI::Vector> cg(sc);
     cg.solve(matrix_u, solution_owned, rhs_owned, prec);
-    constraints.distribute(solution_owned);
+    // The identity rows already force solution_owned == rhs_owned at
+    // boundary DOFs up to CG tolerance; re-impose the exact value so that
+    // tolerance noise doesn't leak into the V-solve or error norms.
+    apply_dirichlet_value(boundary_dofs, boundary_g, time, solution_owned);
     pcout << "  u-equation: " << sc.last_step() << " CG iterations." << std::endl;
   }
 
@@ -231,7 +276,8 @@ void WaveEquation::solve_timestep()
   rhs_owned += force_terms;
 
   // matrix_v (= M, with Dirichlet identity rows) was assembled once too.
-  constraints.set_zero(rhs_owned);
+  // V = dU/dt, so its boundary condition is dg/dt(t^{n+1}), not g(t^{n+1}).
+  apply_dirichlet_value(boundary_dofs, boundary_dgdt, time, rhs_owned);
 
   {
     TrilinosWrappers::PreconditionSSOR prec;
@@ -239,7 +285,7 @@ void WaveEquation::solve_timestep()
     SolverControl sc(1000, 1e-8 * rhs_owned.l2_norm());
     SolverCG<TrilinosWrappers::MPI::Vector> cg(sc);
     cg.solve(matrix_v, velocity_owned, rhs_owned, prec);
-    constraints.distribute(velocity_owned);
+    apply_dirichlet_value(boundary_dofs, boundary_dgdt, time, velocity_owned);
     pcout << "  v-equation: " << sc.last_step() << " CG iterations." << std::endl;
   }
 

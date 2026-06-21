@@ -76,7 +76,9 @@ public:
     }
   };
 
-  // Constructor.
+  // boundary_g_/boundary_dgdt_ prescribe a (possibly time-dependent)
+  // Dirichlet condition U|_boundary = g(x,t), V|_boundary = dg/dt(x,t).
+  // Left null (default), this falls back to homogeneous Dirichlet (g = 0).
   WaveEquation(const std::string                                               &mesh_file_name_,
                const unsigned int                                              &r_,
                const double                                                    &T_,
@@ -87,7 +89,9 @@ public:
                const std::function<double(const Point<dim> &, const double &)> &f_,
                const unsigned int                                               n_subdivisions_ = 50,
                const std::string                                               &output_dir_     = "./results",
-               const bool                                                       enable_output_  = true)
+               const bool                                                       enable_output_  = true,
+               const std::function<double(const Point<dim> &, const double &)>  boundary_g_     = nullptr,
+               const std::function<double(const Point<dim> &, const double &)>  boundary_dgdt_  = nullptr)
     : mesh_file_name(mesh_file_name_)
     , r(r_)
     , T(T_)
@@ -99,6 +103,8 @@ public:
     , n_subdivisions(n_subdivisions_)
     , output_dir(output_dir_)
     , enable_output(enable_output_)
+    , boundary_g(boundary_g_)
+    , boundary_dgdt(boundary_dgdt_)
     , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
     , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
     , pcout(std::cout, mpi_rank == 0)
@@ -148,7 +154,7 @@ protected:
   void
   assemble_matrices();
 
-  // Computes RHS and solves for U_{n+1}
+  // Solves for U_{n+1} and V_{n+1} at the next timestep.
   void
   solve_timestep();
 
@@ -161,7 +167,7 @@ protected:
   void
   output() const;
 
-  // --- Parameters ---
+  // Parameters
   const std::string mesh_file_name;
   const unsigned int r;
   const double T;
@@ -177,6 +183,11 @@ protected:
   const std::string output_dir;
   // If false, run() skips VTU/PVTU writes (used in convergence studies).
   const bool enable_output;
+
+  // Time-dependent Dirichlet boundary data: U|_boundary = g(x,t),
+  // V|_boundary = dg/dt(x,t). Null means homogeneous Dirichlet (g = 0).
+  std::function<double(const Point<dim> &, const double &)> boundary_g;
+  std::function<double(const Point<dim> &, const double &)> boundary_dgdt;
 
   double time = 0.0;
   unsigned int timestep_number = 0;
@@ -207,10 +218,25 @@ protected:
   TrilinosWrappers::MPI::Vector old_velocity_owned, old_velocity;   // V_n
 
 private:
+  // Sets rhs(dof) = value_fn(point, t) for every (dof, point) pair. Used to
+  // impose a Dirichlet value at DOFs that already have an identity row in
+  // the system matrix, so the RHS value IS the solution value there.
+  // Falls back to 0 (homogeneous Dirichlet) if value_fn is null.
+  static void
+  apply_dirichlet_value(const std::vector<std::pair<types::global_dof_index, Point<dim>>> &dofs,
+                         const std::function<double(const Point<dim> &, const double &)>   &value_fn,
+                         const double                                                        t,
+                         TrilinosWrappers::MPI::Vector                                       &rhs);
+
   // Temporary vectors for assembly and solving
   TrilinosWrappers::MPI::Vector rhs_owned;
   TrilinosWrappers::MPI::Vector tmp_owned;
   TrilinosWrappers::MPI::Vector force_terms;
+
+  // Locally-owned Dirichlet-boundary DOFs paired with their support point,
+  // so solve_timestep() can re-evaluate boundary_g/boundary_dgdt at the
+  // right location each step without searching the boundary again.
+  std::vector<std::pair<types::global_dof_index, Point<dim>>> boundary_dofs;
 
   // Energy CSV logging state, see enable_energy_log().
   bool energy_log_enabled = false;
