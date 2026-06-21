@@ -3,6 +3,7 @@
 
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/quadrature_lib.h>
+#include <deal.II/base/timer.h>
 
 #include <deal.II/distributed/fully_distributed_tria.h>
 
@@ -108,6 +109,7 @@ public:
     , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
     , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
     , pcout(std::cout, mpi_rank == 0)
+    , computing_timer(pcout, TimerOutput::never, TimerOutput::wall_times)
     , mesh(MPI_COMM_WORLD)
   {}
 
@@ -196,6 +198,9 @@ protected:
   const unsigned int mpi_size;
   const unsigned int mpi_rank;
   ConditionalOStream pcout;
+  // Per-rank timer (no MPI synchronization). Report min/avg/max 
+  // with print_wall_time_statistics(MPI_COMM_WORLD) after run.
+  TimerOutput computing_timer;
 
   // FE structure
   parallel::fullydistributed::Triangulation<dim> mesh;

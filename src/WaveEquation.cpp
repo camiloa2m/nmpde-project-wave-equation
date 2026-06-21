@@ -140,6 +140,8 @@ void WaveEquation::setup()
 
 void WaveEquation::assemble_matrices()
 {
+  TimerOutput::Scope t(computing_timer, "assembly");
+
   pcout << "Assembling matrices..." << std::endl;
   mass_matrix      = 0;
   stiffness_matrix = 0;
@@ -247,6 +249,7 @@ void WaveEquation::solve_timestep()
   apply_dirichlet_value(boundary_dofs, boundary_g, time, rhs_owned);
 
   {
+    TimerOutput::Scope t(computing_timer, "solve U");
     TrilinosWrappers::PreconditionSSOR prec;
     prec.initialize(matrix_u);
     SolverControl sc(1000, 1e-8 * rhs_owned.l2_norm());
@@ -280,6 +283,7 @@ void WaveEquation::solve_timestep()
   apply_dirichlet_value(boundary_dofs, boundary_dgdt, time, rhs_owned);
 
   {
+    TimerOutput::Scope t(computing_timer, "solve V");
     TrilinosWrappers::PreconditionSSOR prec;
     prec.initialize(matrix_v);
     SolverControl sc(1000, 1e-8 * rhs_owned.l2_norm());
@@ -486,4 +490,6 @@ void WaveEquation::run()
       pcout << "  (max-min)/E^0  = " << rel_variation << std::endl;
       pcout << "===============================================" << std::endl;
     }
+
+  computing_timer.print_wall_time_statistics(MPI_COMM_WORLD);
 }
