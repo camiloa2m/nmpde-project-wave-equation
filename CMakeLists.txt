@@ -11,3 +11,6 @@ deal_ii_setup_target(convergence-wave)
 
 add_executable(energy-wave src/energy-wave.cpp src/WaveEquation.cpp)
 deal_ii_setup_target(energy-wave)
+
+add_executable(dispersion-wave src/dispersion-wave.cpp src/WaveEquation.cpp)
+deal_ii_setup_target(dispersion-wave)
