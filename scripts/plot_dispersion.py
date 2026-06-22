@@ -45,8 +45,8 @@ def plot_spatial(axis_csv, diagonal_csv, out_dir):
     fig, ax = plt.subplots(figsize=(7, 6))
 
     series = {
-        "Axis-aligned (theta=0)": (axis_csv, "tab:blue", "o"),
-        "Diagonal (theta=pi/4)": (diagonal_csv, "tab:red", "s"),
+        "Axis-aligned (angle=0)": (axis_csv, "tab:blue", "o"),
+        "Diagonal (angle=pi/4)": (diagonal_csv, "tab:red", "s"),
     }
 
     slopes = {}
@@ -64,7 +64,7 @@ def plot_spatial(axis_csv, diagonal_csv, out_dir):
         slope, _ = loglog_slope(h, err)
         slopes[label] = slope
 
-        if label == "Axis-aligned (theta=0)":
+        if label == "Axis-aligned (angle=0)":
             axis_rows_sorted = rows
 
     # O(h^2) reference line anchored at the axis direction's coarsest point
