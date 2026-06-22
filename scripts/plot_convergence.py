@@ -18,10 +18,14 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DATA_DIR = os.path.join(REPO_ROOT, "results", "convergence")
 
-OMEGA_HOMOGENEOUS = "omega4.44288"  # omega = pi*sqrt(2), f == 0
-OMEGA_FORCED = "omega6.28319"  # omega = 2*pi, nonzero forcing
+OMEGA_HOMOGENEOUS = "omega4.44288"  # omega = pi*sqrt(2); homogeneous (no forcing)
+OMEGA_FORCED = "omega6.28319"  # omega = 2*pi; forced problem (nonzero source)
 
 EXCLUDED_DT = 0.0025
+
+# Fixed mesh size h used for the temporal convergence study. Chosen to
+# expose time-discretization error while avoiding excessive spatial noise.
+TEMPORAL_STUDY_H = 0.0078125
 
 OMEGA_LABEL = {
     OMEGA_HOMOGENEOUS: r"homogeneous ($\omega=\pi\sqrt{2}$)",
@@ -79,6 +83,21 @@ def reference_line(x_anchor, y_anchor, slope, x_range):
     return x, y
 
 
+def spatial_floor_at(spatial_csvs, h):
+    """Return L2 error at mesh size `h` for each omega case.
+
+    The returned values serve as the spatial error floor: any temporal
+    study point with L2 below this floor can no longer be attributed
+    solely to time discretization and should be treated with caution.
+    """
+    floors = {}
+    for omega_key, path in spatial_csvs.items():
+        rows = read_csv(path)
+        row = next(r for r in rows if abs(r["h"] - h) < 1e-12)
+        floors[omega_key] = row["L2_error"]
+    return floors
+
+
 def plot_spatial(spatial_csvs, out_dir):
     fig, ax = plt.subplots(figsize=(7, 6))
 
@@ -105,8 +124,8 @@ def plot_spatial(spatial_csvs, out_dir):
             slope, _ = loglog_slope(h, err)
             slopes[(omega_key, err_key)] = slope
 
-    # Reference O(h) / O(h^2) lines anchored at the coarsest homogeneous-case
-    # point, just to show the theoretical rate alongside the actual data.
+    # Draw reference O(h^2) and O(h) lines anchored at the coarsest
+    # homogeneous data point to compare theoretical rates with measured data.
     h_min, h_max = min(all_h), max(all_h)
 
     rows_ref = sorted(read_csv(spatial_csvs[OMEGA_HOMOGENEOUS]), key=lambda r: r["h"])
@@ -141,11 +160,13 @@ def plot_spatial(spatial_csvs, out_dir):
             )
 
 
-def plot_temporal(temporal_csvs, out_dir):
+def plot_temporal(temporal_csvs, out_dir, spatial_floors):
     fig, ax = plt.subplots(figsize=(7, 6))
 
     slopes = {}
     excluded = []
+    floor_compromised = []
+    floor_trusted = []
 
     all_dt = []
     for omega_key, path in temporal_csvs.items():
@@ -154,6 +175,16 @@ def plot_temporal(temporal_csvs, out_dir):
         kept = [r for r in rows if r["dt"] != EXCLUDED_DT]
         dropped = [r for r in rows if r["dt"] == EXCLUDED_DT]
         excluded.extend((omega_key, r) for r in dropped)
+
+        # Flag kept points whose L2 falls below the independently-measured
+        # spatial error floor at this h. Those points no longer isolate the
+        # temporal error and are unreliable indicators of dt^2 convergence,
+        # although we still plot and include them in the fit.
+        floor = spatial_floors[omega_key]
+        below_floor = [r for r in kept if r["dt"] == 0.005 and r["L2_error"] < floor]
+        above_floor = [r for r in kept if r["dt"] == 0.005 and r["L2_error"] >= floor]
+        floor_compromised.extend((omega_key, r, floor) for r in below_floor)
+        floor_trusted.extend((omega_key, r, floor) for r in above_floor)
 
         dt = np.array([r["dt"] for r in kept])
         l2 = np.array([r["L2_error"] for r in kept])
@@ -168,10 +199,24 @@ def plot_temporal(temporal_csvs, out_dir):
             label=f"L2, {OMEGA_LABEL[omega_key]}",
         )
 
+        if below_floor:
+            ax.loglog(
+                [r["dt"] for r in below_floor],
+                [r["L2_error"] for r in below_floor],
+                linestyle="none",
+                marker=OMEGA_MARKER[omega_key],
+                markersize=11,
+                markerfacecolor="white",
+                markeredgecolor=ERROR_COLOR["L2_error"],
+                markeredgewidth=1.8,
+                zorder=5,
+            )
+
         slope, _ = loglog_slope(dt, l2)
         slopes[omega_key] = slope
 
-    # O(dt^2) reference line anchored at dt=0.02 of the homogeneous case.
+    # Add an O(dt^2) reference line anchored at homogeneous dt=0.02 for
+    # visual comparison with the measured temporal convergence.
     rows_ref = sorted(read_csv(temporal_csvs[OMEGA_HOMOGENEOUS]), key=lambda r: r["dt"])
     anchor = next(r for r in rows_ref if r["dt"] == 0.02)
     dt_min, dt_max = min(all_dt), max(all_dt)
@@ -189,15 +234,26 @@ def plot_temporal(temporal_csvs, out_dir):
         note_lines.append(
             f"  {omega_key}: dt=0.0025 -> L2_error={r['L2_error']:.5e} (excluded)"
         )
+    if floor_compromised:
+        note_lines.append("dt = 0.005 below independently-measured spatial floor (open marker):")
+        for omega_key, r, floor in floor_compromised:
+            note_lines.append(
+                f"  {omega_key}: L2_error={r['L2_error']:.5e} < floor={floor:.5e} (compromised)"
+            )
+        for omega_key, r, floor in floor_trusted:
+            note_lines.append(
+                f"  {omega_key}: L2_error={r['L2_error']:.5e} >= floor={floor:.5e} "
+                f"-> dt=0.005 trustworthy"
+            )
     note = "\n".join(note_lines)
     ax.text(
-        0.02,
+        0.98,
         0.02,
         note,
         transform=ax.transAxes,
         fontsize=7,
         verticalalignment="bottom",
-        horizontalalignment="left",
+        horizontalalignment="right",
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, edgecolor="0.7"),
     )
 
@@ -210,6 +266,11 @@ def plot_temporal(temporal_csvs, out_dir):
     print("Excluded points (spatial error floor, not plotted/fitted):")
     for omega_key, r in excluded:
         print(f"  {omega_key}: dt=0.0025 -> L2_error={r['L2_error']:.5e} (excluded)")
+    print("dt=0.005 points compromised by the spatial error floor (plotted with open marker, still fitted):")
+    for omega_key, r, floor in floor_compromised:
+        print(f"  {omega_key}: L2_error={r['L2_error']:.5e} < floor={floor:.5e} (compromised)")
+    for omega_key, r, floor in floor_trusted:
+        print(f"  {omega_key}: L2_error={r['L2_error']:.5e} >= floor={floor:.5e} (trustworthy)")
     print("Figure 2 (temporal) least-squares log-log slopes (dt in {0.02, 0.01, 0.005}):")
     for omega_key in temporal_csvs:
         print(f"  {OMEGA_LABEL[omega_key]:35s} L2: slope = {slopes[omega_key]:.4f}")
@@ -243,7 +304,8 @@ def main():
     }
 
     plot_spatial(spatial_csvs, out_dir)
-    plot_temporal(temporal_csvs, out_dir)
+    spatial_floors = spatial_floor_at(spatial_csvs, TEMPORAL_STUDY_H)
+    plot_temporal(temporal_csvs, out_dir, spatial_floors)
 
 
 if __name__ == "__main__":
