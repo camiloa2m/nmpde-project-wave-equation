@@ -229,33 +229,6 @@ def plot_temporal(temporal_csvs, out_dir, spatial_floors):
     ax.legend(fontsize=8)
     ax.grid(True, which="both", linestyle=":", linewidth=0.5)
 
-    note_lines = ["dt = 0.0025 excluded (spatial error floor at h=0.0078125):"]
-    for omega_key, r in excluded:
-        note_lines.append(
-            f"  {omega_key}: dt=0.0025 -> L2_error={r['L2_error']:.5e} (excluded)"
-        )
-    if floor_compromised:
-        note_lines.append("dt = 0.005 below independently-measured spatial floor (open marker):")
-        for omega_key, r, floor in floor_compromised:
-            note_lines.append(
-                f"  {omega_key}: L2_error={r['L2_error']:.5e} < floor={floor:.5e} (compromised)"
-            )
-        for omega_key, r, floor in floor_trusted:
-            note_lines.append(
-                f"  {omega_key}: L2_error={r['L2_error']:.5e} >= floor={floor:.5e} "
-                f"-> dt=0.005 trustworthy"
-            )
-    note = "\n".join(note_lines)
-    ax.text(
-        0.98,
-        0.02,
-        note,
-        transform=ax.transAxes,
-        fontsize=7,
-        verticalalignment="bottom",
-        horizontalalignment="right",
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, edgecolor="0.7"),
-    )
 
     fig.tight_layout()
     out_path = os.path.join(out_dir, "convergence_temporal.png")
