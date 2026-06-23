@@ -1,9 +1,6 @@
-### Organizing the source code
-Please place all your sources into the `src` folder.
+## Wave equation solver
 
-Binary files must not be uploaded to the repository (including executables).
-
-Mesh files should not be uploaded to the repository. If applicable, upload `gmsh` scripts with suitable instructions to generate the meshes (and ideally a Makefile that runs those instructions). If not applicable, consider uploading the meshes to a different file sharing service, and providing a download link as part of the building and running instructions.
+This project implements a parallel finite element solver, built on [deal.II](https://www.dealii.org/) and Trilinos, for the second-order wave equation `rho(x) * u_tt - div(c(x) * grad(u)) = f(x,t)` on a 2D domain, with support for (possibly time-dependent) Dirichlet boundary conditions. Time integration uses the theta-method (`theta=0` explicit, `theta=0.5` Crank-Nicolson, `theta=1` implicit Euler) on top of a Pk Lagrange finite element space. The core solver lives in [`src/WaveEquation.hpp`](src/WaveEquation.hpp)/[`src/WaveEquation.cpp`](src/WaveEquation.cpp) and is driven by four executables: a demo (`exercise-wave`) plus three numerical studies (`convergence-wave`, `energy-wave`, `dispersion-wave`) covering accuracy, energy stability, and phase error respectively, each documented in its own section below.
 
 ### Compiling
 To build the executables, make sure you have loaded the needed modules with
@@ -17,15 +14,25 @@ $ cd build
 $ cmake ..
 $ make
 ```
-This produces three executables in `build`:
+This produces four executables in `build`:
 - `exercise-wave`: Gaussian-pulse demo on the unit square, homogeneous Dirichlet BCs with reflecting boundaries.
 - `convergence-wave`: manufactured-solution convergence study, spatial and temporal sweeps, P1 with theta=0.5.
 - `energy-wave`: discrete energy conservation/instability study for the theta-method time-stepping scheme.
+- `dispersion-wave`: numerical phase (dispersion) error study for a prescribed plane wave.
 
 Each can be run from `build` with
 ```bash
 $ ./executable-name
 ```
+
+The study runner scripts below (`run_convergence_study.sh`, `run_energy_study.sh`, `run_dispersion_study.sh`), on the other hand, are meant to be run from the repository root, not from `build`: each one takes `build_dir` (default `build`) and `out_dir` as arguments relative to the current directory, builds the corresponding executable into `build_dir` if it isn't there yet, and creates `out_dir` (e.g. `results/convergence`) if it doesn't exist, writing the CSVs there. So a typical first run from a clean checkout is just:
+```bash
+$ mkdir build && cd build && cmake .. && make && cd ..
+$ ./run_convergence_study.sh build results/convergence
+$ ./run_energy_study.sh build results/energy
+$ ./run_dispersion_study.sh build results/dispersion
+```
+which leaves `build/` (executables) and `results/` (CSVs and, after plotting, PNGs) side by side at the repository root.
 
 ### Convergence study (`convergence-wave`)
 `run_convergence_study.sh` runs `convergence-wave` through both the spatial (h) and temporal (dt) sweeps, for two manufactured-solution cases: homogeneous (`omega = pi*sqrt(2)`, `f == 0`) and forced (`omega = 2*pi`, `f != 0`).
@@ -70,16 +77,13 @@ $ python3 scripts/plot_energy.py --data-dir results/energy --out-dir scripts/out
 ```
 
 ### Dispersion study (`dispersion-wave`)
-`dispersion-wave` measures numerical phase (dispersion) error for a
-prescribed plane wave. It performs three experiments:
+`dispersion-wave` measures numerical phase (dispersion) error for a prescribed plane wave. It performs three experiments:
 
 - spatial sweep (Experiment 1)
 - temporal sweep (Experiment 2)
 - cancellation sweep (Experiment 3)
 
-Each experiment may be executed for the axis-aligned and diagonal
-propagation directions where applicable. The study writes phase-error CSVs
-into the chosen output directory.
+Each experiment may be executed for the axis-aligned and diagonal propagation directions where applicable. The study writes phase-error CSVs into the chosen output directory.
 
 Run the helper script:
 ```bash
@@ -89,4 +93,10 @@ Examples:
 ```bash
 $ ./run_dispersion_study.sh build results/dispersion                # all experiments, single rank
 $ ./run_dispersion_study.sh build results/dispersion spatial 4      # spatial experiment, 4 MPI ranks
+```
+
+The plotting script `plot_dispersion.py` lives in `scripts/` and reads the five CSVs (`dispersion_spatial_axis.csv`, `dispersion_spatial_diagonal.csv`, `dispersion_temporal.csv`, `dispersion_cancellation_axis.csv`, `dispersion_cancellation_diagonal.csv`) from `results/dispersion/` by default, writing `dispersion_spatial.png`, `dispersion_temporal.png`, and `dispersion_cancellation.png` (plus least-squares log-log slopes printed to the console):
+```bash
+$ python3 scripts/plot_dispersion.py
+$ python3 scripts/plot_dispersion.py --data-dir results/dispersion --out-dir scripts/out  # explicit dirs
 ```
