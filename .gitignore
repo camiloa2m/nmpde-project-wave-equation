@@ -40,14 +40,3 @@
 
 # Core dumps
 core
-
-# Images
-*.jpg
-*.jpeg
-*.png
-*.bmp
-*.gif
-*.svg
-
-# Csv files
-*.csv
