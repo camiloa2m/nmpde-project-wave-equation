@@ -252,10 +252,22 @@ int main(int argc, char *argv[])
                 << case_tag << std::endl;
       table.write_text(std::cout);
     }
+  else if (sweep_kind == "example")
+    {
+      // Single run at a fixed resolution with VTU output enabled, for
+      // visualizing the manufactured solution (e.g. in ParaView).
+      const unsigned int N       = 64;
+      const double       delta_t = 1e-3;
+
+      WaveEquation problem("mms", r, T, delta_t, theta, rho, c, f, N,
+                            "./results-example-" + case_tag,
+                            /* enable_output = */ true);
+      problem.run();
+    }
   else
     {
       AssertThrow(false, ExcMessage("Unknown sweep kind '" + sweep_kind +
-                                     "'. Use 'spatial' or 'temporal'."));
+                                     "'. Use 'spatial', 'temporal', or 'example'."));
     }
 
   return 0;
